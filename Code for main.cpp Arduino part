@@ -1,0 +1,100 @@
+#include <Arduino.h>
+#include <LiquidCrystal.h>
+
+/*read the sound level from the analog pin
+
+detect threshold events from the digital pin
+
+turn an LED on briefly when threshold is exceeded
+
+send data to the PC in a format the Python GUI can understand*/
+
+LiquidCrystal lcd(7, 6, 5, 4, 3, 9); //RS, E, D4, D5, D6, D7
+
+const int soundAnalogPin = A0;
+const int soundDigitalPin = 2;   // interrupt input from DO
+const int ledPin = 8;
+
+volatile bool soundEvent = false; //threshold event
+
+int soundLevel = 0;
+bool ledOn = false;
+unsigned long ledOffTime = 0;
+
+unsigned long lastLcdUpdate = 0; //last time LCD was refreshed 
+unsigned long lastSerialSend = 0; //last time the data was sent over UART
+
+const unsigned long lcdInterval = 100;     // ms 10 times pers second updated
+const unsigned long serialInterval = 50;   // ms 20 times per second send data to serial
+const unsigned long ledPulseMs = 200;      // ms keep the LED on for 200 ms after event
+
+void soundTriggeredISR() {
+    soundEvent = true;
+}
+
+void setup() {
+    pinMode(soundDigitalPin, INPUT);
+    pinMode(ledPin, OUTPUT);
+    digitalWrite(ledPin, LOW);
+
+    Serial.begin(9600);
+
+    lcd.begin(16, 2);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Sound Monitor");
+
+    attachInterrupt(digitalPinToInterrupt(soundDigitalPin), soundTriggeredISR, FALLING); //when signal from pin 2 changed inform soundTriggeredISR
+}
+
+void loop() {
+    unsigned long now = millis(); //since arduino started running
+
+    // Read analog sound level continuously
+    soundLevel = analogRead(soundAnalogPin);
+
+    // Handle interrupt event in main loop
+    if (soundEvent) {
+        soundEvent = false; //event has been handled
+        ledOn = true;
+        ledOffTime = now + ledPulseMs; //computes when the LED should turn off
+        digitalWrite(ledPin, HIGH);
+    }
+
+    // Turn LED off after pulse time
+    if (ledOn && now >= ledOffTime) {
+        ledOn = false;
+        digitalWrite(ledPin, LOW);
+    }
+
+    // Update LCD periodically
+    if (now - lastLcdUpdate >= lcdInterval) {
+        lastLcdUpdate = now;
+
+        lcd.setCursor(0, 0);
+        lcd.print("Sound:          ");
+        lcd.setCursor(7, 0);
+        lcd.print(soundLevel);
+
+        lcd.setCursor(0, 1);
+        if (ledOn) {
+            lcd.print("THR: HIT        ");
+        } else {
+            lcd.print("THR: OK         ");
+        }
+    }
+
+    // Send UART data periodically
+    if (now - lastSerialSend >= serialInterval) {
+        lastSerialSend = now;
+
+        int rawState = digitalRead(soundDigitalPin);
+        int over = (rawState == LOW) ? 1 : 0;
+
+        Serial.print(now);
+        Serial.print(",");
+        Serial.print(soundLevel);
+        Serial.print(",");
+        Serial.println(over);
+    }
+}
